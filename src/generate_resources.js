@@ -2,6 +2,9 @@ import fs from "fs";
 import path from "path";
 import sharp from "sharp";
 import MBTiles from "@mapbox/mbtiles";
+import cluster from "cluster";
+import { cpus } from "os";
+const numCPUs = cpus().length / 2;
 
 import {
   calculateTileRangeForBounds,
@@ -118,130 +121,164 @@ export const generateMBTiles = async (
     });
   });
 
-  try {
-    // Start writing to the MBTiles file
-    mbtiles.startWriting((error) => {
-      if (error) {
-        throw error;
-      } else {
-        let metadata = {
-          name: outputFilename,
-          format: "jpg",
-          minzoom: minZoom,
-          maxzoom: maxZoom,
-          type: "overlay",
-        };
-
-        // Check if metadata.json exists in the sourceDir
-        const metadataFile = path.join(sourceDir, "metadata.json");
-        if (fs.existsSync(metadataFile)) {
-          try {
-            // Read and parse the metadata.json file
-            const metadataJson = fs.readFileSync(metadataFile, "utf8");
-            const metadataFromFile = JSON.parse(metadataJson);
-
-            // Merge the file metadata with the default metadata
-            metadata = { ...metadata, ...metadataFromFile };
-          } catch (error) {
-            console.error(`Error reading metadata.json file: ${error}`);
-          }
-        }
-
-        mbtiles.putInfo(metadata, (error) => {
-          if (error) throw error;
-        });
-      }
-    });
-
-    // Iterate over zoom levels
-    for (let zoom = minZoom; zoom <= maxZoom; zoom++) {
-      console.log(`Rendering zoom level ${zoom}...`);
-      // Calculate tile range for this zoom level based on bounds
-      const { minX, minY, maxX, maxY } = calculateTileRangeForBounds(
-        bounds,
-        zoom,
-      );
-
-      validateMinMaxValues(minX, minY, maxX, maxY);
-
-      // Iterate over tiles within the range
-      for (let x = minX; x <= maxX; x++) {
-        for (let y = minY; y <= maxY; y++) {
-          try {
-            // Render the tile
-            const tileBuffer = await renderTile(
-              styleObject,
-              styleDir,
-              sourceDir,
-              ratio,
-              tiletype,
-              zoom,
-              x,
-              y,
-            );
-
-            // Write the tile to the MBTiles file
-            mbtiles.putTile(zoom, x, y, tileBuffer, (err) => {
-              if (err) throw err;
-            });
-
-            // Increment the number of tiles
-            numberOfTiles++;
-          } catch (error) {
-            console.error(`Error rendering tile ${zoom}/${x}/${y}: ${error}`);
-          }
-        }
-      }
+  if (cluster.isMaster) {
+    // Create worker processes
+    for (let i = 0; i < numCPUs; i++) {
+      cluster.fork();
     }
 
-    // Finish writing and close the MBTiles file
-    await new Promise((resolve, reject) => {
-      mbtiles.stopWriting((err) => {
-        if (err) reject(err);
-        resolve();
+    // Collect results from worker processes
+    let results = [];
+    cluster.on("message", (worker, message) => {
+      results.push(message);
+    });
+
+    // Wait for all worker processes to complete
+    await new Promise((resolve) => {
+      cluster.on("exit", (worker, code, signal) => {
+        if (code === 0 && signal === null) {
+          if (results.length === numCPUs) {
+            resolve();
+          }
+        }
       });
     });
 
-    fileSize = fs.statSync(tempPath).size;
-  } catch (error) {
-    throw new Error(`Error writing MBTiles file: ${error}`);
-  }
+    // Merge results from worker processes
+    for (let result of results) {
+      numberOfTiles += result.numberOfTiles;
+      fileSize += result.fileSize;
+    }
 
-  // Move the generated MBTiles file to the output directory
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-  const outputPath = `${outputDir}/${outputFilename}.mbtiles`;
+    // Move the generated MBTiles file to the output directory
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    const outputPath = `${outputDir}/${outputFilename}.mbtiles`;
 
-  try {
-    const readStream = fs.createReadStream(tempPath);
-    const writeStream = fs.createWriteStream(outputPath);
+    try {
+      const readStream = fs.createReadStream(tempPath);
+      const writeStream = fs.createWriteStream(outputPath);
 
-    readStream.on("error", (err) => {
-      console.error(`Error reading MBTiles file: ${err}`);
-    });
+      readStream.on("error", (err) => {
+        console.error(`Error reading MBTiles file: ${err}`);
+      });
 
-    writeStream.on("error", (err) => {
-      console.error(`Error writing MBTiles file: ${err}`);
-    });
+      writeStream.on("error", (err) => {
+        console.error(`Error writing MBTiles file: ${err}`);
+      });
 
-    writeStream.on("close", () => {
-      // Delete the temporary tiles directory and style
-      if (tempDir !== null) {
-        fs.promises.rm(tempDir, { recursive: true });
+      writeStream.on("close", () => {
+        // Delete the temporary tiles directory and style
+        if (tempDir !== null) {
+          fs.promises.rm(tempDir, { recursive: true });
+        }
+      });
+
+      readStream.pipe(writeStream);
+    } catch (error) {
+      throw new Error(`Error moving MBTiles file: ${error}`);
+    }
+
+    // Return with success status
+    return {
+      errorMessage: null,
+      fileLocation: outputPath,
+      fileSize: fileSize,
+      numberOfTiles,
+    };
+  } else {
+    // Worker process
+    try {
+      // Start writing to the MBTiles file
+      mbtiles.startWriting((error) => {
+        if (error) {
+          throw error;
+        } else {
+          let metadata = {
+            name: outputFilename,
+            format: "jpg",
+            minzoom: minZoom,
+            maxzoom: maxZoom,
+            type: "overlay",
+          };
+
+          // Check if metadata.json exists in the sourceDir
+          const metadataFile = path.join(sourceDir, "metadata.json");
+          if (fs.existsSync(metadataFile)) {
+            try {
+              // Read and parse the metadata.json file
+              const metadataJson = fs.readFileSync(metadataFile, "utf8");
+              const metadataFromFile = JSON.parse(metadataJson);
+
+              // Merge the file metadata with the default metadata
+              metadata = { ...metadata, ...metadataFromFile };
+            } catch (error) {
+              console.error(`Error reading metadata.json file: ${error}`);
+            }
+          }
+
+          mbtiles.putInfo(metadata, (error) => {
+            if (error) throw error;
+          });
+        }
+      });
+
+      // Render tiles and write them to the MBTiles file
+      for (let zoom = minZoom; zoom <= maxZoom; zoom++) {
+        console.log(`Rendering zoom level ${zoom}...`);
+        // Calculate tile range for this zoom level based on bounds
+        const { minX, minY, maxX, maxY } = calculateTileRangeForBounds(
+          bounds,
+          zoom,
+        );
+
+        validateMinMaxValues(minX, minY, maxX, maxY);
+
+        // Iterate over tiles within the range
+        for (let x = minX; x <= maxX; x++) {
+          for (let y = minY; y <= maxY; y++) {
+            try {
+              // Render the tile
+              const tileBuffer = await renderTile(
+                styleObject,
+                styleDir,
+                sourceDir,
+                ratio,
+                tiletype,
+                zoom,
+                x,
+                y,
+              );
+
+              // Write the tile to the MBTiles file
+              mbtiles.putTile(zoom, x, y, tileBuffer, (err) => {
+                if (err) throw err;
+              });
+
+              // Increment the number of tiles
+              numberOfTiles++;
+            } catch (error) {
+              console.error(`Error rendering tile ${zoom}/${x}/${y}: ${error}`);
+            }
+          }
+        }
       }
-    });
 
-    readStream.pipe(writeStream);
-  } catch (error) {
-    throw new Error(`Error moving MBTiles file: ${error}`);
+      // Finish writing and close the MBTiles file
+      await new Promise((resolve, reject) => {
+        mbtiles.stopWriting((err) => {
+          if (err) reject(err);
+          resolve();
+        });
+      });
+
+      fileSize = fs.statSync(tempPath).size;
+
+      // Send results back to the master process
+      process.send({ numberOfTiles, fileSize });
+    } catch (error) {
+      throw new Error(`Error writing MBTiles file: ${error}`);
+    }
   }
-
-  // Return with success status
-  return {
-    errorMessage: null,
-    fileLocation: outputPath,
-    fileSize: fileSize,
-    numberOfTiles,
-  };
 };
