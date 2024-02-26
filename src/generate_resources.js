@@ -2,6 +2,9 @@ import fs from "fs";
 import path from "path";
 import sharp from "sharp";
 import MBTiles from "@mapbox/mbtiles";
+import { PromisePool } from "@supercharge/promise-pool";
+import { cpus } from "os";
+const numCPUs = cpus().length;
 
 import {
   calculateTileRangeForBounds,
@@ -165,33 +168,54 @@ export const generateMBTiles = async (
       validateMinMaxValues(minX, minY, maxX, maxY);
 
       // Iterate over tiles within the range
+      const tilePromises = [];
       for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
-          try {
-            // Render the tile
-            const tileBuffer = await renderTile(
-              styleObject,
-              styleDir,
-              sourceDir,
-              ratio,
-              tiletype,
-              zoom,
-              x,
-              y,
-            );
+          tilePromises.push(
+            new Promise(async (resolve, reject) => {
+              try {
+                console.log("numberOfTiles");
+                console.log(numberOfTiles);
+                console.log(zoom);
+                console.log(x);
+                console.log(y);
+                // Render the tile
+                const tileBuffer = await renderTile(
+                  styleObject,
+                  styleDir,
+                  sourceDir,
+                  ratio,
+                  tiletype,
+                  zoom,
+                  x,
+                  y,
+                );
 
-            // Write the tile to the MBTiles file
-            mbtiles.putTile(zoom, x, y, tileBuffer, (err) => {
-              if (err) throw err;
-            });
+                console.log("tileBuffer");
+                console.log(tileBuffer);
 
-            // Increment the number of tiles
-            numberOfTiles++;
-          } catch (error) {
-            console.error(`Error rendering tile ${zoom}/${x}/${y}: ${error}`);
-          }
+                // Write the tile to the MBTiles file
+                mbtiles.putTile(zoom, x, y, tileBuffer, (err) => {
+                  if (err) throw err;
+                });
+
+                // Increment the number of tiles
+                console.log("numberOfTiles");
+                console.log(numberOfTiles);
+                numberOfTiles++;
+                resolve(numberOfTiles);
+              } catch (error) {
+                console.error(
+                  `Error rendering tile ${zoom}/${x}/${y}: ${error}`,
+                );
+                reject(error);
+              }
+            }),
+          );
         }
       }
+
+      const promisePool = new PromisePool(tilePromises);
     }
 
     // Finish writing and close the MBTiles file
