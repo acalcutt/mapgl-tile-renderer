@@ -70,6 +70,8 @@ const getLocalSpriteImage = (styleDir, url, callback) => {
 
 // Given a URL to a local sprite JSON, get the JSON data.
 const getLocalSpriteJSON = (styleDir, url, callback) => {
+  console.log(styleDir);
+  console.log(url);
   const spriteJsonPath = path.join(styleDir, `${url}`);
   fs.readFile(spriteJsonPath, (err, data) => {
     if (err) {

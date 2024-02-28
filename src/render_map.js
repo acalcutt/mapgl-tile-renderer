@@ -2,7 +2,7 @@ import { calculateNormalizedCenterCoords } from "./tile_calculations.js";
 import { generateImage } from "./generate_resources.js";
 
 // Render the map, returning a Promise.
-const renderMap = (renderer, options) => {
+const renderMap = async (renderer, options) => {
   renderer.render(options, (err, buffer) => {
     if (err) {
       console.error("Error during map rendering:", err);
@@ -29,20 +29,26 @@ export const renderTile = (
 
   console.log(renderer);
 
+  console.log("styleObject");
+  console.log(styleObject);
   renderer.load(styleObject);
 
-  // Render the map to a buffer
-  const buffer = renderMap(renderer, {
+  let render_options = {
     zoom: zoom,
     center: center,
     height: tileSize,
     width: tileSize,
+  };
+
+  renderer.render(render_options, (err, buffer) => {
+    if (err) throw err;
+
+    map.release();
+
+    console.log("buffer");
+    console.log(buffer);
+    const image = generateImage(buffer, tiletype, tileSize, tileSize, ratio);
+
+    return image;
   });
-
-  // Clean up the map instance to free resources
-  renderer.release();
-
-  const image = generateImage(buffer, tiletype, tileSize, tileSize, ratio);
-
-  return image;
 };

@@ -188,7 +188,6 @@ export const generateMBTiles = async (
     maxPoolSize,
   );
   console.log(renderPool);
-  console.log(renderPool.Pool);
 
   // Iterate over zoom levels
   for (let zoom = minZoom; zoom <= maxZoom; zoom++) {
@@ -204,54 +203,35 @@ export const generateMBTiles = async (
     for (let x = minX; x <= maxX; x++) {
       for (let y = minY; y <= maxY; y++) {
         numberOfTilesWaiting++;
-        const fn = function (err, renderer) {
+        renderPool.acquire((err, renderer) => {
+          console.log("rendering");
           if (err) {
-            // something went wrong
             console.log(err);
-          } else {
-            // we got our resource!
-            console.log("FN # got resource: ");
-            console.log(renderer);
-            const tileBuffer = renderTile(
-              renderer,
-              styleObject,
-              ratio,
-              tiletype,
-              zoom,
-              x,
-              y,
-            );
-            renderPool.release(renderer);
-
-            console.log("tileBuffer");
-            console.log(tileBuffer);
-
-            // Write the tile to the MBTiles file
-            mbtiles.putTile(zoom, x, y, tileBuffer, (err) => {
-              if (err) throw err;
-            });
-
-            // Increment the number of tiles
-            numberOfTiles++;
+            return;
           }
-        };
-        // request resource
-        // the bind part is there only to get an ID of the request and is optional
-        renderPool.acquire(fn);
-      }
-    }
-  }
 
-  // wait for all requests to complete
-  while (1) {
-    if (numberOfTiles == numberOfTilesWaiting) {
-      console.log("All workers finished, closing pool");
-      renderPool.close();
-      clearInterval(interval);
-      break;
-    } else {
-      //console.log(numberOfTiles + ' / ' + numberOfTilesWaiting + ' workers finished');
-      //console.log(renderPool)
+          const tileBuffer = renderTile(
+            renderer,
+            styleObject,
+            ratio,
+            tiletype,
+            zoom,
+            x,
+            y,
+          );
+          console.log("tileBuffer");
+          console.log(tileBuffer);
+
+          // Write the tile to the MBTiles file
+          mbtiles.putTile(zoom, x, y, tileBuffer, (err) => {
+            if (err) throw err;
+          });
+
+          // Increment the number of tiles
+          numberOfTiles++;
+          renderPool.release(renderer);
+        });
+      }
     }
   }
 
