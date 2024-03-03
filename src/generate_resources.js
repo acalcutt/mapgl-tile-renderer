@@ -93,11 +93,11 @@ const createPool = (styleDir, sourceDir, ratio, mode, min, max) => {
   return new advancedPool.Pool({
     min,
     max,
-    create: function (callback) {
+    create: async function (callback) {
       const resource = new maplibre.Map({
         mode,
         ratio,
-        request: requestHandler(styleDir, sourceDir),
+        request: await requestHandler(styleDir, sourceDir),
       });
       callback(null, resource);
     },
@@ -128,24 +128,11 @@ export const generateMBTiles = async (
   let numberOfTilesWaiting = 0;
   let fileSize = 0;
 
-  // Create a new MBTiles file
-  const mbtiles = await new Promise((resolve, reject) => {
-    new MBTiles(`${tempPath}?mode=rwc`, (error, mbtiles) => {
-      if (error) {
-        console.error("Error opening MBTiles file:", error);
-        reject(error);
-      } else {
-        resolve(mbtiles);
-      }
-    });
-  });
+  console.log(tempPath);
+  new MBTiles(`${tempPath}?mode=rwc`, function (err, mbtiles) {
+    console.log(mbtiles); // mbtiles object with methods listed below
 
-  //try {
-  // Start writing to the MBTiles file
-  mbtiles.startWriting((error) => {
-    if (error) {
-      throw error;
-    } else {
+    mbtiles.startWriting(function (err) {
       let metadata = {
         name: outputFilename,
         format: tiletype,
@@ -172,74 +159,73 @@ export const generateMBTiles = async (
       mbtiles.putInfo(metadata, (error) => {
         if (error) throw error;
       });
-    }
-  });
 
-  console.log("Create rendering pools...");
+      console.log("Create rendering pools...");
 
-  const minPoolSize = 8;
-  const maxPoolSize = 16;
-  const renderPool = createPool(
-    styleDir,
-    sourceDir,
-    ratio,
-    "tile",
-    minPoolSize,
-    maxPoolSize,
-  );
-  console.log(renderPool);
+      const minPoolSize = 1;
+      const maxPoolSize = 1;
+      const renderPool = createPool(
+        styleDir,
+        sourceDir,
+        ratio,
+        "tile",
+        minPoolSize,
+        maxPoolSize,
+      );
+      console.log(renderPool);
 
-  // Iterate over zoom levels
-  for (let zoom = minZoom; zoom <= maxZoom; zoom++) {
-    console.log(`Rendering zoom level ${zoom}...`);
-    // Calculate tile range for this zoom level based on bounds
-    const { minX, minY, maxX, maxY } = calculateTileRangeForBounds(
-      bounds,
-      zoom,
-    );
+      // Iterate over zoom levels
+      for (let zoom = minZoom; zoom <= maxZoom; zoom++) {
+        console.log(`Rendering zoom level ${zoom}...`);
+        // Calculate tile range for this zoom level based on bounds
+        const { minX, minY, maxX, maxY } = calculateTileRangeForBounds(
+          bounds,
+          zoom,
+        );
 
-    validateMinMaxValues(minX, minY, maxX, maxY);
-    // Iterate over tiles within the range
-    for (let x = minX; x <= maxX; x++) {
-      for (let y = minY; y <= maxY; y++) {
-        numberOfTilesWaiting++;
-        renderPool.acquire((err, renderer) => {
-          console.log("rendering");
-          if (err) {
-            console.log(err);
-            return;
+        validateMinMaxValues(minX, minY, maxX, maxY);
+        // Iterate over tiles within the range
+        for (let x = minX; x <= maxX; x++) {
+          for (let y = minY; y <= maxY; y++) {
+            numberOfTilesWaiting++;
+            renderPool.acquire(async (err, renderer) => {
+              console.log("rendering");
+              console.log(zoom);
+              console.log(x);
+              console.log(y);
+              if (err) {
+                console.log(err);
+                return;
+              }
+
+              const tileBuffer = await renderTile(
+                renderer,
+                styleObject,
+                ratio,
+                tiletype,
+                zoom,
+                x,
+                y,
+              );
+              console.log("tileBuffer");
+              console.log(tileBuffer);
+
+              // Write the tile to the MBTiles file
+              mbtiles.putTile(zoom, x, y, tileBuffer, (err) => {
+                if (err) throw err;
+              });
+
+              // Increment the number of tiles
+              numberOfTiles++;
+              renderPool.release(renderer);
+            });
           }
-
-          const tileBuffer = renderTile(
-            renderer,
-            styleObject,
-            ratio,
-            tiletype,
-            zoom,
-            x,
-            y,
-          );
-          console.log("tileBuffer");
-          console.log(tileBuffer);
-
-          // Write the tile to the MBTiles file
-          mbtiles.putTile(zoom, x, y, tileBuffer, (err) => {
-            if (err) throw err;
-          });
-
-          // Increment the number of tiles
-          numberOfTiles++;
-          renderPool.release(renderer);
-        });
+        }
       }
-    }
-  }
 
-  // Finish writing and close the MBTiles file
-  await new Promise((resolve, reject) => {
-    mbtiles.stopWriting((err) => {
-      if (err) reject(err);
-      resolve();
+      mbtiles.stopWriting(function (err) {
+        // stop writing to your mbtiles object
+      });
     });
   });
 

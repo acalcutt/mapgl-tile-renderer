@@ -57,12 +57,14 @@ const resolveMBTilesURL = (sourceDir, url) =>
 // Given a URL to a local sprite image, get the image data.
 const getLocalSpriteImage = (styleDir, url, callback) => {
   const spriteImagePath = path.join(styleDir, `${url}`);
+  console.log(spriteImagePath);
 
   fs.readFile(spriteImagePath, (err, data) => {
     if (err) {
       callback(err);
       return null;
     }
+    console.log(data);
     callback(null, { data });
     return null;
   });
@@ -125,13 +127,18 @@ const getPMTilesTileJSON = async (sourceDir, url, callback) => {
    * @param {function} callback - function to call with (err, {data}).
    */
   const pmtilesFile = resolvePMTilesURL(sourceDir, url);
+  console.log(pmtilesFile);
   const service = resolveNamefromPMtilesURL(url);
 
   //Open the pmtiles file
-  const pmtiles = openPMtiles(pmtilesFile);
+  const pmtiles = await openPMtiles(pmtilesFile);
+  console.log("pmtiles");
+  console.log(pmtiles);
 
   //Get PMtiles header information
   const header = await pmtiles.getHeader();
+  console.log("header");
+  console.log(header);
 
   // If the tileType is 1(mvt/pbf), add a .pbf extension
   const ext = header.tileType === 1 ? ".pbf" : "";
@@ -167,12 +174,13 @@ const getPMTilesTileJSON = async (sourceDir, url, callback) => {
     bounds: header.bounds,
   };
 
+  console.log(JSON.stringify(tileJSON));
   callback(null, { data: Buffer.from(JSON.stringify(tileJSON)) });
   return null;
 };
 
 // Given a URL to a local mbtiles file, get the TileJSON for that to load correct tiles.
-const getLocalMBTileJSON = (sourceDir, url, callback) => {
+const getLocalMBTileJSON = async (sourceDir, url, callback) => {
   /*
    * @param {String} sourceDir - path containing mbtiles files.
    * @param {String} url - url of a data source in style.json file.
@@ -288,7 +296,7 @@ const getLocalMBTile = (sourceDir, url, callback) => {
 };
 
 // Fetch a tile from a local XYZ directory.
-const getLocalXYZTile = (sourceDir, url, callback) => {
+const getLocalXYZTile = async (sourceDir, url, callback) => {
   /*
    * @param {String} sourceDir - path containing XYZ tiles.
    * @param {String} url - url of a data source in style.json file.
@@ -319,7 +327,7 @@ const getLocalXYZTile = (sourceDir, url, callback) => {
 };
 
 // Given a URL to a local GeoJSON file, get the GeoJSON for that to load correct tiles.
-const getLocalGeoJSON = (sourceDir, url, callback) => {
+const getLocalGeoJSON = async (sourceDir, url, callback) => {
   /*
    * @param {String} geojsonPath - path containing GeoJSON files.
    * @param {String} url - url of a data source in style.json file.
@@ -343,7 +351,7 @@ const getLocalGeoJSON = (sourceDir, url, callback) => {
 };
 
 // Given a URL to a local Protomaps TileJSON file, get the TileJSON for that to load correct tiles.
-const getLocalProtomapsTileJSON = (url, callback) => {
+const getLocalProtomapsTileJSON = async (url, callback) => {
   /*
    * @param {String} url - url of a data source in style.json file.
    * @param {function} callback - function to call with (err, {data}).
@@ -360,23 +368,24 @@ const getLocalProtomapsTileJSON = (url, callback) => {
 
 // requestHandler constructs a request handler for the map to load resources.
 // More about request types (kinds) in MapLibre: https://github.com/maplibre/maplibre-native/blob/main/platform/node/README.md
-export const requestHandler =
-  (styleDir, sourceDir) =>
-  ({ url, kind }, callback) => {
+export async function requestHandler(styleDir, sourceDir) {
+  return async ({ url, kind }, callback) => {
     try {
+      console.log(kind);
       switch (kind) {
         case 2: {
+          console.log(url);
           // source
           if (isMBTilesURL(url)) {
-            getLocalMBTileJSON(sourceDir, url, callback);
+            await getLocalMBTileJSON(sourceDir, url, callback);
           } else if (isPMTilesURL(url)) {
-            getPMTilesTileJSON(sourceDir, url, callback);
+            await getPMTilesTileJSON(sourceDir, url, callback);
           } else if (isXYZDirURL(url)) {
-            getLocalXYZTile(sourceDir, url, callback);
+            await getLocalXYZTile(sourceDir, url, callback);
           } else if (isGeoJSONURL(url)) {
-            getLocalGeoJSON(sourceDir, url, callback);
+            await getLocalGeoJSON(sourceDir, url, callback);
           } else if (isProtomapsTileJSONURL(url)) {
-            getLocalProtomapsTileJSON(url, callback);
+            await getLocalProtomapsTileJSON(url, callback);
           } else {
             const msg = `Only local sources are currently supported. Received: ${url}`;
             throw new Error(msg);
@@ -410,6 +419,8 @@ export const requestHandler =
         }
         case 5: {
           // sprite image
+          console.log(styleDir);
+          console.log(url);
           if (isOnlineURL(url)) {
             getOnlineData(url, callback);
           } else {
@@ -419,6 +430,7 @@ export const requestHandler =
         }
         case 6: {
           // sprite json
+          console.log(url);
           if (isOnlineURL(url)) {
             getOnlineData(url, callback);
           } else {
@@ -436,6 +448,7 @@ export const requestHandler =
       callback(msg);
     }
   };
+}
 
 // pmtiles class to allow reading from a local file
 class PMTilesFileSource {
@@ -452,24 +465,24 @@ class PMTilesFileSource {
       buffer.byteOffset,
       buffer.byteOffset + buffer.byteLength,
     );
+    console.log("ab");
+    console.log(ab);
     return { data: ab };
   }
 }
 
 // reads specified bytes from a file
 async function readFileBytes(fd, buffer, offset) {
-  return new Promise((resolve, reject) => {
-    fs.read(fd, buffer, 0, buffer.length, offset, (err) => {
-      if (err) {
-        return reject(err);
-      }
-      resolve();
-    });
+  return fs.read(fd, buffer, 0, buffer.length, offset, (err) => {
+    if (err) {
+      return reject(err);
+    }
+    resolve();
   });
 }
 
 // open the pmtiles file or url
-function openPMtiles(pmtilesFile) {
+async function openPMtiles(pmtilesFile) {
   let pmtiles;
   if (isOnlineURL(pmtilesFile)) {
     const source = new FetchSource(pmtilesFile);
